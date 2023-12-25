@@ -32,6 +32,7 @@ import {
 import isPlainObject from 'is-plain-object';
 import HTML_BOX from './acolorpicker.html';
 
+
 const VERSION = '1.2.2';
 
 const IS_EDGE = typeof window !== 'undefined' && window.navigator.userAgent.indexOf('Edge') > -1,
@@ -43,9 +44,11 @@ const DEFAULT = {
     showHSL: true,
     showRGB: true,
     showHEX: true,
+    showOne: false,
     showAlpha: false,
     color: '#ff0000',
     palette: null,
+    historyPalette: [],
     paletteEditable: false,
     useAlphaInPalette: 'auto', //true|false|auto
     slBarSize: [232, 150],
@@ -214,6 +217,35 @@ function copyOptionsFromElement(options, element, attrPrefix = 'acp-') {
     }
 }
 
+function switchType(showOne, element){
+    if (showOne) {
+        var clickElts = ['hex-label', 'rgb-label', 'hsl-label'];
+        var showElts = ['a-color-picker-rgbhex', "a-color-picker-rgb", "a-color-picker-hsl"];
+        var existDiv = [];
+        var existLabel = [];
+        for (let i = 0; i < showElts.length; i++) {
+            var getElts = element.getElementsByClassName(showElts[i]);
+            if (getElts[0]) {
+                // 加载到存在的div
+                existDiv.push(getElts[0]);
+                existLabel.push(element.getElementsByClassName(clickElts[i])[0]);
+                // 标记element
+                if (existDiv.length > 1) {
+                    getElts[0].style.display = 'none';
+                }
+            }
+        }
+        // 加入监听
+        existLabel.forEach(elt => {
+            elt.addEventListener('click', (e) => {
+                var index = existLabel.indexOf(elt);
+                existDiv[index].style.display = 'none';
+                existDiv[(index + 1) % existDiv.length].style.display = 'flex';
+            });
+        });
+    }
+}
+
 class ColorPicker {
     constructor(container, options) {
         //controllo se siamo nel caso di options passato come primo parametro
@@ -246,6 +278,7 @@ class ColorPicker {
             // andrà a contenere la palette di colori effettivamente usata
             // compresi i colori aggiunti o rimossi dall'utente, non sarà modificabile dirretamente dall'utente
             this.palette = { /*<color>: boolean*/ };
+            this.historyPalette = { /*<color>: boolean*/ };
 
             // creo gli elementi HTML e li aggiungo al container
             this.element = document.createElement('div');
@@ -298,16 +331,30 @@ class ColorPicker {
             } else {
                 this.element.querySelector('.a-color-picker-rgbhex').remove();
             }
+            // 如果只展示一个
+            switchType(this.options.showOne, this.element);
+
             // preparo la palette con i colori predefiniti
             //  (palette può contenere sia un Array che una stringa, entrambi con prop length)
-            if (this.options.paletteEditable || (this.options.palette && this.options.palette.length > 0)) {
-                this.setPalette(this.paletteRow = this.element.querySelector('.a-color-picker-palette'));
+            if (this.options.palette && this.options.palette.length > 0) {
+                this.setPalette(this.paletteRow = this.element.querySelector('.a-color-picker-palette'), this.options.palette, this.palette);
             } else {
                 // #17 se l'elemento della palette è rimosso non posso modificarne il contenuto a posteriori
                 // rimuovo l'elemento dal DOM ma non lo elimino, potrebbe servirmi in seguito
                 this.paletteRow = this.element.querySelector('.a-color-picker-palette');
                 this.paletteRow.remove();
             }
+
+            // history
+            if (this.options.historyPalette && this.options.historyPalette.length > 0) {
+                this.setPalette(this.historyPaletteRow = this.element.querySelector('.a-color-picker-palette-history'), this.options.historyPalette, this.historyPalette);
+            } else {
+                // #17 se l'elemento della palette è rimosso non posso modificarne il contenuto a posteriori
+                // rimuovo l'elemento dal DOM ma non lo elimino, potrebbe servirmi in seguito
+                this.historyPaletteRow = this.element.querySelector('.a-color-picker-palette-history');
+                this.historyPaletteRow.remove();
+            }
+
             // preparo in canvas per l'opacità
             if (this.options.showAlpha) {
                 this.setupAlphaCanvas(this.element.querySelector('.a-color-picker-a'));
@@ -316,8 +363,8 @@ class ColorPicker {
                 this.element.querySelector('.a-color-picker-alpha').remove();
             }
             this.element.style.width = `${this.options.slBarSize[0]}px`;
-            // imposto il colore iniziale
-            this.onValueChanged(COLOR, this.options.color);
+            // 初始化不要加入历史，
+            this.onValueChanged(COLOR, this.options.color, {addHistory: false});
         } else {
             throw new Error(`Container not found: ${this.options.attachTo}`);
         }
@@ -475,24 +522,15 @@ class ColorPicker {
         });
     }
 
-    setPalette(/** @type {Element} */ row) {
+    setPalette(/** @type {Element} */ row, palette, paletteDic) {
+        // this.palette 是字典
+        // palette 是数组
         // indica se considerare il canale alpha nei controlli della palette
         // se 'auto' dipende dall'opzione showAlpha (se true allora alpha è considerata anche nella palette)
         const useAlphaInPalette = this.options.useAlphaInPalette === 'auto' ? this.options.showAlpha : this.options.useAlphaInPalette;
         // palette è una copia di this.options.palette
-        let palette = null;
-        switch (this.options.palette) {
-            case 'PALETTE_MATERIAL_500':
-                palette = PALETTE_MATERIAL_500;
-                break;
-            case 'PALETTE_MATERIAL_CHROME':
-                palette = PALETTE_MATERIAL_CHROME;
-                break;
-            default:
-                palette = ensureArray(this.options.palette);
-                break;
-        }
-        if (this.options.paletteEditable || palette.length > 0) {
+
+        if (palette.length > 0) {
             const addColorToPalette = (color, refElement, fire) => {
                 // se il colore è già presente, non creo un nuovo <div> ma sposto quello esistente in coda
                 const el = row.querySelector('.a-color-picker-palette-color[data-color="' + color + '"]') ||
@@ -502,29 +540,9 @@ class ColorPicker {
                 el.setAttribute('data-color', color);
                 el.title = color;
                 row.insertBefore(el, refElement);
-                this.palette[color] = true;
+                paletteDic[color] = true;
                 if (fire) {
                     this.onPaletteColorAdd(color);
-                }
-            };
-            const removeColorToPalette = (element, fire) => {
-                // se element è nullo elimino tutti i colori
-                if (element) {
-                    row.removeChild(element);
-                    this.palette[element.getAttribute('data-color')] = false;
-                    if (fire) {
-                        this.onPaletteColorRemove(element.getAttribute('data-color'));
-                    }
-                } else {
-                    row.querySelectorAll('.a-color-picker-palette-color[data-color]').forEach(el => {
-                        row.removeChild(el);
-                    });
-                    Object.keys(this.palette).forEach(k => {
-                        this.palette[k] = false;
-                    });
-                    if (fire) {
-                        this.onPaletteColorRemove();
-                    }
                 }
             };
             // solo i colori validi vengono aggiunti alla palette
@@ -532,45 +550,14 @@ class ColorPicker {
                 .filter(c => !!c)
                 .forEach(c => addColorToPalette(c));
             // in caso di palette editabile viene aggiunto un pulsante + che serve ad aggiungere il colore corrente
-            if (this.options.paletteEditable) {
-                const el = document.createElement('div');
-                el.className = 'a-color-picker-palette-color a-color-picker-palette-add';
-                el.innerHTML = '+';
-                row.appendChild(el);
-                // gestisco eventi di aggiunta/rimozione/selezione colori
-                row.addEventListener('click', (e) => {
-                    if (/a-color-picker-palette-add/.test(e.target.className)) {
-                        if (e.shiftKey) {
-                            // rimuove tutti i colori
-                            removeColorToPalette(null, true);
-                        } else if (useAlphaInPalette) {
-                            // aggiungo il colore e triggero l'evento 'oncoloradd'
-                            addColorToPalette(parseColor([this.R, this.G, this.B, this.A], 'rgbcss4'), e.target, true);
-                        } else {
-                            // aggiungo il colore e triggero l'evento 'oncoloradd'
-                            addColorToPalette(rgbToHex(this.R, this.G, this.B), e.target, true);
-                        }
-                    } else if (/a-color-picker-palette-color/.test(e.target.className)) {
-                        if (e.shiftKey) {
-                            // rimuovo il colore e triggero l'evento 'oncolorremove'
-                            removeColorToPalette(e.target, true);
-                        } else {
-                            // visto che il colore letto da backgroundColor risulta nel formato rgb()
-                            // devo usare il valore hex originale
-                            this.onValueChanged(COLOR, e.target.getAttribute('data-color'));
-                        }
-                    }
-                });
-            } else {
-                // gestisco il solo evento di selezione del colore
-                row.addEventListener('click', (e) => {
-                    if (/a-color-picker-palette-color/.test(e.target.className)) {
-                        // visto che il colore letto da backgroundColor risulta nel formato rgb()
-                        // devo usare il valore hex originale
-                        this.onValueChanged(COLOR, e.target.getAttribute('data-color'));
-                    }
-                });
-            }
+            // gestisco il solo evento di selezione del colore
+            row.addEventListener('click', (e) => {
+                if (/a-color-picker-palette-color/.test(e.target.className)) {
+                    // visto che il colore letto da backgroundColor risulta nel formato rgb()
+                    // devo usare il valore hex originale
+                    this.onValueChanged(COLOR, e.target.getAttribute('data-color'));
+                }
+            });
         } else {
             // la palette con i colori predefiniti viene nasconsta se non ci sono colori
             row.style.display = 'none';
@@ -586,11 +573,20 @@ class ColorPicker {
             this.element.appendChild(this.paletteRow);
         }
         // aggiorno le opzioni e ricreo i controlli
-        this.options.palette = palette;
-        this.setPalette(this.paletteRow);
+        this.setPalette(this.paletteRow, palette, this.palette);
     }
 
-    onValueChanged(prop, value, options = { silent: false }) {
+    updateHistoryPalette(palette) {
+        this.historyPaletteRow.innerHTML = '';
+        this.historyPalette = { };
+        if (!this.historyPaletteRow.parentElement) {
+            this.element.appendChild(this.historyPaletteRow);
+        }
+        // aggiorno le opzioni e ricreo i controlli
+        this.setPalette(this.historyPaletteRow, palette, this.historyPalette);
+    }
+
+    onValueChanged(prop, value, options = { silent: false, addHistory: true }) {
         // console.log(prop, value);
         switch (prop) {
             case HUE:
@@ -718,6 +714,23 @@ class ColorPicker {
             this.preview.style.backgroundColor = `rgb(${this.R},${this.G},${this.B})`;
         } else {
             this.preview.style.backgroundColor = `rgba(${this.R},${this.G},${this.B},${this.A})`;
+        }
+        // 加入历史
+        if (!options || options.addHistory) {
+            let afterValue = this.inputRGBHEX.value;
+            // 1、在末尾则不操作
+            if (this.options.historyPalette.length > 0 && afterValue === this.options.historyPalette[0]) {
+                // do nothing
+            } else {
+                // 2/ 若不在末尾，先删除存在的色彩
+                this.options.historyPalette = this.options.historyPalette.filter(item => afterValue !== item);
+                this.options.historyPalette.unshift(afterValue);
+                // 3/ 若大于长度则删除首个
+                if (this.options.historyPalette.length > 10) {
+                    this.options.historyPalette.splice(this.options.historyPalette.length - 1, 1);
+                }
+                this.updateHistoryPalette(this.options.historyPalette)
+            }
         }
         // #21
         if (!options || !options.silent) {

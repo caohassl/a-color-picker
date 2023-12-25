@@ -7,3 +7,6 @@ bower_components/
 .eslintrc*
 todo
 .vscode/
+/package-lock.json
+/dist/
+/.idea/

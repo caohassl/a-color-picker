@@ -20,3 +20,7 @@ See [api and demo](https://narsenico.github.io/a-color-picker/)
     ```js
     AColorPicker.from('div.container');
     ```
+   
+npm init -y
+npm i webpack webpack-cli -D  
+npm run build:dev 
